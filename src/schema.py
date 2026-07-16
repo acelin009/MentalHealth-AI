@@ -54,7 +54,7 @@ COLUMN_MAP = {
     'work_interfere': 'interference_when_treated',
     
     # OSMI 2017+
-    '*Are you self-employed?*': 'self_employed',
+    'Are you self-employed?': 'self_employed',
     'How many employees does your company or organization have?': 'no_employees',
     'Is your employer primarily a tech company/organization?': 'tech_company',
     'Is your primary role within your company related to tech/IT?': 'primary_role_tech',
