@@ -5,23 +5,17 @@ import re
 from pathlib import Path
 import pandas as pd
 from .schema import COLUMN_MAP, UNIFIED_SCHEMA, DATASET_PATTERNS
-from src.config import PROCESSED_DATA
-
+from src.config import (
+    MODELING_DATASET,
+    ENGINEERED_DATASET
+)
 
 def load_ml_dataset():
-    """Load the machine learning ready dataset."""
-    file_path = PROCESSED_DATA / "ml_ready_dataset.csv"
-    if not file_path.exists():
-        raise FileNotFoundError(f"Dataset not found at {file_path}")
-    return pd.read_csv(file_path)
+    return pd.read_csv(MODELING_DATASET)
 
 
 def load_engineered_dataset():
-    """Load the feature engineered dataset."""
-    file_path = PROCESSED_DATA / "engineered_osmi_data.csv"
-    if not file_path.exists():
-        raise FileNotFoundError(f"Dataset not found at {file_path}")
-    return pd.read_csv(file_path)
+    return pd.read_csv(ENGINEERED_DATASET)
 
 class DataLoader:
     """Load and combine mental health survey datasets"""
