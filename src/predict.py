@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 import joblib
-import streamlit as st
+from pathlib import Path
 from src.config import MODELS_DIR
 
 
@@ -47,7 +47,6 @@ class MentalHealthPredictor:
         if self.model is None:
             self.load_model()
         
-        # Handle single instance
         if isinstance(data, dict):
             data = pd.DataFrame([data])
         elif isinstance(data, list) and not isinstance(data, pd.DataFrame):
@@ -106,7 +105,6 @@ class MentalHealthPredictor:
         
         importances = classifier.feature_importances_
         
-        # Try to get feature names
         if 'preprocessor' in self.model.named_steps:
             preprocessor = self.model.named_steps['preprocessor']
             try:
@@ -116,7 +114,6 @@ class MentalHealthPredictor:
         else:
             feature_names = [f"feature_{i}" for i in range(len(importances))]
         
-        # Ensure lengths match
         if len(feature_names) != len(importances):
             feature_names = [f"feature_{i}" for i in range(len(importances))]
         
@@ -149,13 +146,15 @@ def create_prediction_input(feature_values):
     return pd.DataFrame([feature_values])
 
 
-# Example usage for Streamlit
-def get_predictor(model_path=None):
-    """Singleton pattern for Streamlit app."""
+# STREAMLIT-SPECIFIC FUNCTION MOVED HERE
+# This function is now separate from the core prediction logic
+# It should be used in the dashboard app, not imported by core modules
+def get_predictor_for_streamlit(model_path=None):
+    """
+    Singleton pattern for Streamlit app.
+    This function is for Streamlit use only.
+    """
+    import streamlit as st
     if 'predictor' not in st.session_state:
         st.session_state.predictor = MentalHealthPredictor(model_path)
     return st.session_state.predictor
-
-
-# Add missing import
-from pathlib import Path
