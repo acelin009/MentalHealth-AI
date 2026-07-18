@@ -1,209 +1,247 @@
-def compute_shap_values(model, X_sample, background=None, nsamples=100):
+"""
+Model explanation utilities
+Focuses on permutation importance and model interpretability
+"""
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.inspection import permutation_importance
+from src.config import RESULTS_DIR
+
+
+def compute_permutation_importance(model, X, y, n_repeats=10, random_state=42, scoring='f1'):
     """
-    Compute SHAP values for model explanations using SHAP 0.52.0+ API.
+    Compute permutation feature importance for a trained model.
     
-    Args:
-        model: Trained model (must be a pipeline with preprocessor)
-        X_sample: Sample data for explanation (DataFrame)
-        background: Background data for SHAP explainer (DataFrame, optional)
-        nsamples: Number of samples for KernelExplainer (default: 100)
+    Parameters
+    ----------
+    model : estimator or Pipeline
+        Trained machine learning model.
+    X : pandas.DataFrame
+        Input features.
+    y : pandas.Series
+        Target values.
+    n_repeats : int, default=10
+        Number of times each feature is shuffled.
+    random_state : int, default=42
+        Random seed for reproducibility.
+    scoring : str, default='f1'
+        Scoring metric to use for importance calculation.
     
-    Returns:
-        Dictionary containing:
-        - shap_values: SHAP Explanation object
-        - feature_names: List of feature names
-        - expected_value: Base/expected value
-        - X_transformed: Transformed feature matrix
-        - explainer: SHAP explainer object
+    Returns
+    -------
+    pandas.DataFrame
+        Feature importance scores sorted from highest to lowest.
     """
-    # Extract classifier and preprocessor from pipeline
+    # Extract classifier if using pipeline
     if hasattr(model, 'named_steps'):
         classifier = model.named_steps.get('classifier', model)
         preprocessor = model.named_steps.get('preprocessor', None)
+        
+        # Transform X if preprocessor exists
+        if preprocessor is not None:
+            X_transformed = preprocessor.transform(X)
+            try:
+                feature_names = preprocessor.get_feature_names_out()
+            except:
+                feature_names = [f"feature_{i}" for i in range(X_transformed.shape[1])]
+        else:
+            X_transformed = X
+            feature_names = X.columns.tolist() if hasattr(X, 'columns') else [f"feature_{i}" for i in range(X.shape[1])]
     else:
         classifier = model
-        preprocessor = None
+        X_transformed = X
+        feature_names = X.columns.tolist() if hasattr(X, 'columns') else [f"feature_{i}" for i in range(X.shape[1])]
     
-    # Convert to DataFrame if needed
-    if isinstance(X_sample, (np.ndarray, list)):
-        X_sample = pd.DataFrame(X_sample)
+    # Compute permutation importance
+    result = permutation_importance(
+        classifier,
+        X_transformed,
+        y,
+        n_repeats=n_repeats,
+        random_state=random_state,
+        scoring=scoring
+    )
     
-    # If background is not provided, use X_sample as background
-    if background is None:
-        background = X_sample
-    elif isinstance(background, (np.ndarray, list)):
-        background = pd.DataFrame(background)
+    # Create importance dataframe
+    importance_df = pd.DataFrame({
+        'feature': feature_names,
+        'importance': result.importances_mean,
+        'std': result.importances_std
+    }).sort_values('importance', ascending=False).reset_index(drop=True)
     
-    # Transform data if preprocessor is available
-    if preprocessor is not None:
-        X_background_transformed = preprocessor.transform(background)
-        X_sample_transformed = preprocessor.transform(X_sample)
-        try:
-            feature_names = preprocessor.get_feature_names_out()
-        except:
-            feature_names = [f"feature_{i}" for i in range(X_sample_transformed.shape[1])]
+    return importance_df
+
+
+def plot_permutation_importance(importance_df, top_n=20, save=True, title="Permutation Feature Importance"):
+    """
+    Plot permutation feature importance.
+    
+    Parameters
+    ----------
+    importance_df : pandas.DataFrame
+        DataFrame from compute_permutation_importance()
+    top_n : int, default=20
+        Number of top features to display
+    save : bool, default=True
+        Whether to save the plot
+    title : str, default="Permutation Feature Importance"
+        Plot title
+    
+    Returns
+    -------
+    matplotlib.figure.Figure
+        The figure object
+    """
+    # Get top N features
+    top_features = importance_df.head(top_n)
+    
+    # Create plot
+    fig, ax = plt.subplots(figsize=(10, max(6, top_n * 0.3)))
+    
+    # Horizontal bar chart with error bars
+    ax.barh(top_features['feature'], top_features['importance'],
+            xerr=top_features['std'] if 'std' in top_features else None,
+            color='steelblue', edgecolor='navy', alpha=0.8)
+    
+    ax.set_xlabel('Permutation Importance')
+    ax.set_title(title)
+    ax.invert_yaxis()  # Highest importance at top
+    ax.grid(axis='x', alpha=0.3)
+    
+    # Add value labels
+    for i, v in enumerate(top_features['importance']):
+        ax.text(v + v * 0.01, i, f'{v:.3f}', va='center', fontsize=9)
+    
+    plt.tight_layout()
+    
+    if save:
+        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        plt.savefig(RESULTS_DIR / 'permutation_importance.png', dpi=300, bbox_inches='tight')
+    
+    plt.show()
+    
+    return fig
+
+
+def plot_feature_importance_comparison(model, X, y, n_repeats=10, random_state=42, top_n=20, save=True):
+    """
+    Compare built-in feature importance (if available) with permutation importance.
+    
+    Parameters
+    ----------
+    model : estimator or Pipeline
+        Trained machine learning model.
+    X : pandas.DataFrame
+        Input features.
+    y : pandas.Series
+        Target values.
+    n_repeats : int, default=10
+        Number of times each feature is shuffled.
+    random_state : int, default=42
+        Random seed for reproducibility.
+    top_n : int, default=20
+        Number of top features to display
+    save : bool, default=True
+        Whether to save the plot
+    
+    Returns
+    -------
+    tuple
+        (builtin_importance_df, permutation_importance_df)
+    """
+    # Get built-in feature importance if available
+    builtin_importance = None
+    if hasattr(model, 'named_steps'):
+        classifier = model.named_steps.get('classifier', model)
+        preprocessor = model.named_steps.get('preprocessor', None)
+        
+        if hasattr(classifier, 'feature_importances_'):
+            importances = classifier.feature_importances_
+            
+            if preprocessor is not None:
+                try:
+                    feature_names = preprocessor.get_feature_names_out()
+                except:
+                    feature_names = [f"feature_{i}" for i in range(len(importances))]
+            else:
+                feature_names = X.columns.tolist() if hasattr(X, 'columns') else [f"feature_{i}" for i in range(len(importances))]
+            
+            builtin_importance = pd.DataFrame({
+                'feature': feature_names,
+                'importance': importances
+            }).sort_values('importance', ascending=False).reset_index(drop=True)
+    
+    # Compute permutation importance
+    perm_importance = compute_permutation_importance(
+        model, X, y, n_repeats=n_repeats, random_state=random_state
+    )
+    
+    # Create comparison plot
+    fig, axes = plt.subplots(1, 2 if builtin_importance is not None else 1, 
+                             figsize=(14 if builtin_importance is not None else 8, 
+                                      max(6, top_n * 0.3)))
+    
+    if builtin_importance is not None:
+        ax1 = axes[0]
+        # Plot built-in importance
+        top_builtin = builtin_importance.head(top_n)
+        ax1.barh(top_builtin['feature'], top_builtin['importance'],
+                 color='darkgreen', edgecolor='green', alpha=0.8)
+        ax1.set_xlabel('Built-in Feature Importance')
+        ax1.set_title('Built-in Feature Importance')
+        ax1.invert_yaxis()
+        ax1.grid(axis='x', alpha=0.3)
+        
+        ax2 = axes[1]
+        # Plot permutation importance
+        top_perm = perm_importance.head(top_n)
+        ax2.barh(top_perm['feature'], top_perm['importance'],
+                 xerr=top_perm['std'] if 'std' in top_perm else None,
+                 color='steelblue', edgecolor='navy', alpha=0.8)
+        ax2.set_xlabel('Permutation Importance')
+        ax2.set_title('Permutation Importance')
+        ax2.invert_yaxis()
+        ax2.grid(axis='x', alpha=0.3)
+        
+        plt.suptitle('Feature Importance Comparison', fontsize=14, fontweight='bold')
     else:
-        X_background_transformed = background
-        X_sample_transformed = X_sample
-        feature_names = X_sample.columns.tolist() if hasattr(X_sample, 'columns') else [f"feature_{i}" for i in range(X_sample.shape[1])]
+        ax = axes if not isinstance(axes, list) else axes[0]
+        # Only permutation importance
+        top_perm = perm_importance.head(top_n)
+        ax.barh(top_perm['feature'], top_perm['importance'],
+                xerr=top_perm['std'] if 'std' in top_perm else None,
+                color='steelblue', edgecolor='navy', alpha=0.8)
+        ax.set_xlabel('Permutation Importance')
+        ax.set_title('Permutation Feature Importance')
+        ax.invert_yaxis()
+        ax.grid(axis='x', alpha=0.3)
     
-    # Create SHAP explainer based on model type
-    try:
-        # Try TreeExplainer first (for tree-based models)
-        if hasattr(classifier, 'tree_') or hasattr(classifier, 'estimators_'):
-            # For RandomForest, XGBoost, etc.
-            explainer = shap.TreeExplainer(
-                classifier,
-                X_background_transformed,
-                feature_names=feature_names,
-                model_output='probability' if hasattr(classifier, 'predict_proba') else 'raw'
-            )
-            shap_values = explainer.shap_values(X_sample_transformed)
-            
-            # --- FIX: Handle SHAP 0.52+ output correctly ---
-            # SHAP 0.52 returns (n_samples, n_features, n_classes) for binary classification
-            # We need to extract the positive class (index 1) for the Explanation object
-            if isinstance(shap_values, list):
-                # Old API: list of arrays per class
-                shap_values = shap_values[1]  # Positive class
-            elif len(shap_values.shape) == 3:
-                # New API: 3D array (samples, features, classes)
-                # Extract positive class (index 1)
-                shap_values = shap_values[:, :, 1]
-            # If it's already 2D, use as-is
-            
-            # Get expected value - handle both old and new API
-            if isinstance(explainer.expected_value, list):
-                expected_value = explainer.expected_value[1]  # Positive class
-            else:
-                expected_value = explainer.expected_value
-            
-            # Create Explanation object
-            explanation = shap.Explanation(
-                values=shap_values,
-                base_values=expected_value,
-                data=X_sample_transformed,
-                feature_names=feature_names
-            )
-            
-            return {
-                'shap_values': explanation,
-                'feature_names': feature_names,
-                'expected_value': expected_value,
-                'X_transformed': X_sample_transformed,
-                'explainer': explainer
-            }
-        
-        # For Linear models (LogisticRegression, etc.)
-        elif hasattr(classifier, 'coef_'):
-            explainer = shap.LinearExplainer(
-                classifier,
-                X_background_transformed,
-                feature_names=feature_names
-            )
-            shap_values = explainer.shap_values(X_sample_transformed)
-            
-            # Handle 3D output for linear models if needed
-            if len(shap_values.shape) == 3:
-                shap_values = shap_values[:, :, 1]
-            
-            explanation = shap.Explanation(
-                values=shap_values,
-                base_values=explainer.expected_value,
-                data=X_sample_transformed,
-                feature_names=feature_names
-            )
-            
-            return {
-                'shap_values': explanation,
-                'feature_names': feature_names,
-                'expected_value': explainer.expected_value,
-                'X_transformed': X_sample_transformed,
-                'explainer': explainer
-            }
-        
-        # Fallback to KernelExplainer
-        else:
-            # For KernelExplainer, we need a prediction function
-            if hasattr(classifier, 'predict_proba'):
-                def predict_fn(x):
-                    return classifier.predict_proba(x)[:, 1]  # Positive class probability
-            else:
-                def predict_fn(x):
-                    return classifier.predict(x)
-            
-            # Sample background if too large
-            if len(X_background_transformed) > 100:
-                idx = np.random.choice(len(X_background_transformed), 100, replace=False)
-                X_background_transformed = X_background_transformed[idx]
-            
-            explainer = shap.KernelExplainer(
-                predict_fn,
-                X_background_transformed,
-                feature_names=feature_names
-            )
-            
-            shap_values = explainer.shap_values(X_sample_transformed, nsamples=nsamples)
-            
-            # Handle 3D output for kernel explainer if needed
-            if len(shap_values.shape) == 3:
-                shap_values = shap_values[:, :, 1]
-            
-            explanation = shap.Explanation(
-                values=shap_values,
-                base_values=explainer.expected_value,
-                data=X_sample_transformed,
-                feature_names=feature_names
-            )
-            
-            return {
-                'shap_values': explanation,
-                'feature_names': feature_names,
-                'expected_value': explainer.expected_value,
-                'X_transformed': X_sample_transformed,
-                'explainer': explainer
-            }
-            
-    except Exception as e:
-        print(f"Error computing SHAP values: {e}")
-        print("Falling back to KernelExplainer...")
-        
-        # Fallback to KernelExplainer
-        if hasattr(classifier, 'predict_proba'):
-            def predict_fn(x):
-                return classifier.predict_proba(x)[:, 1]
-        else:
-            def predict_fn(x):
-                return classifier.predict(x)
-        
-        # Sample background if too large
-        if len(X_background_transformed) > 100:
-            idx = np.random.choice(len(X_background_transformed), 100, replace=False)
-            X_background_transformed = X_background_transformed[idx]
-        
-        explainer = shap.KernelExplainer(
-            predict_fn,
-            X_background_transformed,
-            feature_names=feature_names
-        )
-        
-        shap_values = explainer.shap_values(X_sample_transformed, nsamples=nsamples)
-        
-        # Handle 3D output for kernel explainer if needed
-        if len(shap_values.shape) == 3:
-            shap_values = shap_values[:, :, 1]
-        
-        explanation = shap.Explanation(
-            values=shap_values,
-            base_values=explainer.expected_value,
-            data=X_sample_transformed,
-            feature_names=feature_names
-        )
-        
-        return {
-            'shap_values': explanation,
-            'feature_names': feature_names,
-            'expected_value': explainer.expected_value,
-            'X_transformed': X_sample_transformed,
-            'explainer': explainer
-        }
+    plt.tight_layout()
+    
+    if save:
+        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        plt.savefig(RESULTS_DIR / 'feature_importance_comparison.png', dpi=300, bbox_inches='tight')
+    
+    plt.show()
+    
+    return builtin_importance, perm_importance
+
+
+def get_top_features(importance_df, top_n=10):
+    """
+    Get the top N most important features.
+    
+    Parameters
+    ----------
+    importance_df : pandas.DataFrame
+        DataFrame from compute_permutation_importance()
+    top_n : int, default=10
+        Number of top features to return
+    
+    Returns
+    -------
+    pandas.DataFrame
+        Top N features
+    """
+    return importance_df.head(top_n).copy()
